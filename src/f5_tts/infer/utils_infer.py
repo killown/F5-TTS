@@ -400,7 +400,13 @@ def infer_process(
     device=device,
 ):
     # Split the input text into batches
-    audio, sr = torchaudio.load(ref_audio)
+    import librosa
+    import torch
+    
+    # Bypass torchaudio/torchcodec check entirely
+    audio_np, sr = librosa.load(ref_audio, sr=None)
+    audio = torch.from_numpy(audio_np).unsqueeze(0)
+    
     max_chars = int(len(ref_text.encode("utf-8")) / (audio.shape[-1] / sr) * (22 - audio.shape[-1] / sr) * speed)
     gen_text_batches = chunk_text(gen_text, max_chars=max_chars)
     for i, gen_text_i in enumerate(gen_text_batches):
