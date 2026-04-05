@@ -15,15 +15,18 @@ import gradio as gr
 import numpy as np
 import soundfile as sf
 import torch
-import librosa
+import sys
+
 from cached_path import cached_path
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-try:
-    import torchcodec
-except Exception:
+if torch.cuda.is_available() and not torch.version.hip:
+    try:
+        import torchcodec
+    except ImportError:
+        sys.modules["torchcodec"] = None
+else:
     sys.modules["torchcodec"] = None
-
 
 try:
     import spaces
@@ -164,6 +167,20 @@ def infer(
 
     ref_audio, ref_text = preprocess_ref_audio_text(ref_audio_orig, ref_text, show_info=show_info)
 
+    if not ref_text:
+        if show_info:
+            show_info("Transcribing reference audio...")
+
+        audio_np, _ = librosa.load(ref_audio, sr=16000)
+
+        ref_text = asr_pipe(
+            audio_np,
+            chunk_length_s=30,
+            batch_size=128,
+            generate_kwargs={"task": "transcribe"},
+            return_timestamps=False,
+        )["text"].strip()
+
     if model == DEFAULT_TTS_MODEL:
         ema_model = F5TTS_ema_model
     elif model == "E2-TTS":
@@ -201,11 +218,7 @@ def infer(
         try:
             sf.write(temp_path, final_wave, final_sample_rate)
             remove_silence_for_generated_wav(f.name)
-            try:
-                final_wave, _ = torchaudio.load(f.name)
-            except Exception:
-                wave_np, _ = librosa.load(f.name, sr=None, mono=True)
-                final_wave = torch.from_numpy(wave_np).unsqueeze(0)
+            final_wave, _ = torchaudio.load(f.name)
         finally:
             os.unlink(temp_path)
         final_wave = final_wave.squeeze().cpu().numpy()
@@ -307,7 +320,7 @@ with gr.Blocks() as app_tts:
         if randomize_seed:
             seed_input = np.random.randint(0, 2**31 - 1)
 
-        audio_out, spectrogram_path, ref_text_out, used_seed = infer(
+        audio_out, spectrogram_path, ref_text_out, _ = infer(
             ref_audio_input,
             ref_text_input,
             gen_text_input,
@@ -318,7 +331,7 @@ with gr.Blocks() as app_tts:
             nfe_step=nfe_slider,
             speed=speed_slider,
         )
-        return audio_out, spectrogram_path, ref_text_out, used_seed
+        return audio_out, spectrogram_path, ref_text_out, 0
 
     gen_text_file.upload(
         load_text_from_file,
@@ -1144,3 +1157,4 @@ if __name__ == "__main__":
         main()
     else:
         app.queue().launch()
+
