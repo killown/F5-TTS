@@ -192,27 +192,20 @@ def infer(
 
     # Remove silence
     if remove_silence:
-            with tempfile.NamedTemporaryFile(suffix=".wav", **tempfile_kwargs) as f:
-                temp_path = f.name
-            try:
-                sf.write(temp_path, final_wave, final_sample_rate)
-                remove_silence_for_generated_wav(temp_path)
-                
-                # Check if we are on a system where torchaudio.load is broken (ROCm/No torchcodec)
-                try:
-                    import torchcodec
-                    final_wave, _ = torchaudio.load(temp_path)
-                except (ImportError, RuntimeError):
-                    # Fallback for ROCm/AMD: librosa handles the file, then we convert to tensor
-                    final_wave_np, _ = librosa.load(temp_path, sr=None, mono=True)
-                    final_wave = torch.from_numpy(final_wave_np)
-            finally:
-                if os.path.exists(temp_path):
-                    os.unlink(temp_path)
+        with tempfile.NamedTemporaryFile(suffix=".wav", **tempfile_kwargs) as f:
+            temp_path = f.name
+        try:
+            sf.write(temp_path, final_wave, final_sample_rate)
+            remove_silence_for_generated_wav(temp_path)
+            # Use librosa for ROCm compatibility, falling back to tensor
+            final_wave_np, _ = librosa.load(temp_path, sr=None, mono=True)
+            final_wave = torch.from_numpy(final_wave_np)
+        finally:
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
 
-        # Ensure final_wave is a numpy array for the Gradio/Output processing
-        if torch.is_tensor(final_wave):
-            final_wave = final_wave.squeeze().cpu().numpy()
+    if torch.is_tensor(final_wave):
+        final_wave = final_wave.squeeze().cpu().numpy()
 
     # Save the spectrogram
     with tempfile.NamedTemporaryFile(suffix=".png", **tempfile_kwargs) as tmp_spectrogram:
