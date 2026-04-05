@@ -15,10 +15,14 @@ import gradio as gr
 import numpy as np
 import soundfile as sf
 import torch
-import torchaudio
 import librosa
 from cached_path import cached_path
 from transformers import AutoModelForCausalLM, AutoTokenizer
+
+try:
+    import torchcodec
+except Exception:
+    sys.modules["torchcodec"] = None
 
 
 try:
@@ -196,15 +200,14 @@ def infer(
             temp_path = f.name
         try:
             sf.write(temp_path, final_wave, final_sample_rate)
-            remove_silence_for_generated_wav(temp_path)
-            # Use librosa for ROCm compatibility, falling back to tensor
-            final_wave_np, _ = librosa.load(temp_path, sr=None, mono=True)
-            final_wave = torch.from_numpy(final_wave_np)
+            remove_silence_for_generated_wav(f.name)
+            try:
+                final_wave, _ = torchaudio.load(f.name)
+            except Exception:
+                wave_np, _ = librosa.load(f.name, sr=None, mono=True)
+                final_wave = torch.from_numpy(wave_np).unsqueeze(0)
         finally:
-            if os.path.exists(temp_path):
-                os.unlink(temp_path)
-
-    if torch.is_tensor(final_wave):
+            os.unlink(temp_path)
         final_wave = final_wave.squeeze().cpu().numpy()
 
     # Save the spectrogram
