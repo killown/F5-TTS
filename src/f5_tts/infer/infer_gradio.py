@@ -26,6 +26,8 @@ if torch.cuda.is_available() and not torch.version.hip:
     except ImportError:
         sys.modules["torchcodec"] = None
 else:
+    import librosa
+
     sys.modules["torchcodec"] = None
 
 try:
@@ -1157,4 +1159,3 @@ if __name__ == "__main__":
         main()
     else:
         app.queue().launch()
-
