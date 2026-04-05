@@ -52,6 +52,7 @@ from f5_tts.infer.utils_infer import (
     remove_silence_for_generated_wav,
     save_spectrogram,
     tempfile_kwargs,
+    asr_pipe,
 )
 from f5_tts.model import DiT, UNetT
 
@@ -174,13 +175,17 @@ def infer(
 
         audio_np, _ = librosa.load(ref_audio, sr=16000)
 
-        ref_text = asr_pipe(
-            audio_np,
-            chunk_length_s=30,
-            batch_size=128,
-            generate_kwargs={"task": "transcribe"},
-            return_timestamps=False,
-        )["text"].strip()
+        if not ref_text:
+            if show_info:
+                show_info("Transcribing reference audio...")
+            audio_np, _ = librosa.load(ref_audio, sr=16000)
+            ref_text = asr_pipe(
+                audio_np,
+                chunk_length_s=30,
+                batch_size=128,
+                generate_kwargs={"task": "transcribe"},
+                return_timestamps=False,
+            )["text"].strip()
 
     if model == DEFAULT_TTS_MODEL:
         ema_model = F5TTS_ema_model
@@ -218,11 +223,18 @@ def infer(
             temp_path = f.name
         try:
             sf.write(temp_path, final_wave, final_sample_rate)
-            remove_silence_for_generated_wav(f.name)
-            final_wave, _ = torchaudio.load(f.name)
+            remove_silence_for_generated_wav(temp_path)
+            try:
+                final_wave, _ = torchaudio.load(temp_path)
+            except Exception:
+                wave_np, _ = librosa.load(temp_path, sr=None, mono=True)
+                final_wave = torch.from_numpy(wave_np).unsqueeze(0)
         finally:
-            os.unlink(temp_path)
-        final_wave = final_wave.squeeze().cpu().numpy()
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
+
+        if torch.is_tensor(final_wave):
+            final_wave = final_wave.squeeze().cpu().numpy()
 
     # Save the spectrogram
     with tempfile.NamedTemporaryFile(suffix=".png", **tempfile_kwargs) as tmp_spectrogram:
