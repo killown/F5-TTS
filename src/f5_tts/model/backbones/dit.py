@@ -157,6 +157,20 @@ class InputEmbedding(nn.Module):
         if drop_audio_cond:  # cfg for cond audio
             cond = torch.zeros_like(cond)
 
+        target_seq_len = x.shape[1]
+        if cond.shape[1] != target_seq_len:
+            cond = F.pad(cond, (0, 0, 0, target_seq_len - cond.shape[1]))
+        if text_embed.shape[1] != target_seq_len:
+            text_embed = F.pad(text_embed, (0, 0, 0, target_seq_len - text_embed.shape[1]))
+        target_len = x.size(1)
+        if cond.size(1) < target_len:
+            cond = torch.nn.functional.pad(cond, (0, 0, 0, target_len - cond.size(1)))
+        elif cond.size(1) > target_len:
+            cond = cond[:, :target_len, :]
+        if text_embed.size(1) < target_len:
+            text_embed = torch.nn.functional.pad(text_embed, (0, 0, 0, target_len - text_embed.size(1)))
+        elif text_embed.size(1) > target_len:
+            text_embed = text_embed[:, :target_len, :]
         x = self.proj(torch.cat((x, cond, text_embed), dim=-1))
         x = self.conv_pos_embed(x, mask=audio_mask) + x
         return x

@@ -2,8 +2,6 @@
 # Make adjustments inside functions, and consider both gradio and cli scripts if need to change func output format
 import os
 import sys
-from concurrent.futures import ThreadPoolExecutor
-
 
 os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"  # for MPS device compatibility
 sys.path.append(f"{os.path.dirname(os.path.abspath(__file__))}/../../third_party/BigVGAN/")
@@ -15,13 +13,14 @@ from importlib.resources import files
 
 import matplotlib
 
-
 matplotlib.use("Agg")
 
 import matplotlib.pylab as plt
 import numpy as np
 import torch
 import torchaudio
+import librosa
+
 import tqdm
 from huggingface_hub import hf_hub_download
 from pydub import AudioSegment, silence
@@ -30,7 +29,6 @@ from vocos import Vocos
 
 from f5_tts.model import CFM
 from f5_tts.model.utils import convert_char_to_pinyin, get_tokenizer
-
 
 _ref_audio_cache = {}
 _ref_text_cache = {}
@@ -70,7 +68,7 @@ fix_duration = None
 # chunk text into smaller pieces
 
 
-def chunk_text(text, max_chars=135):
+def chunk_text(text, max_chars=100):
     """
     Splits the input text into chunks, each with a maximum number of characters.
 
@@ -300,8 +298,7 @@ def preprocess_ref_audio_text(ref_audio_orig, ref_text, show_info=print):
 
     # Compute a hash of the reference audio file
     with open(ref_audio_orig, "rb") as audio_file:
-        audio_data = audio_file.read()
-        audio_hash = hashlib.md5(audio_data).hexdigest()
+        audio_hash = hashlib.md5(audio_file.read()).hexdigest()
 
     global _ref_audio_cache
 
@@ -399,14 +396,10 @@ def infer_process(
     fix_duration=fix_duration,
     device=device,
 ):
-    # Split the input text into batches
-    import librosa
-    import torch
-    
-    # Bypass torchaudio/torchcodec check entirely
     audio_np, sr = librosa.load(ref_audio, sr=None)
     audio = torch.from_numpy(audio_np).unsqueeze(0)
-    
+
+    # Split the input text into batches
     max_chars = int(len(ref_text.encode("utf-8")) / (audio.shape[-1] / sr) * (22 - audio.shape[-1] / sr) * speed)
     gen_text_batches = chunk_text(gen_text, max_chars=max_chars)
     for i, gen_text_i in enumerate(gen_text_batches):
@@ -462,7 +455,12 @@ def infer_batch_process(
     streaming=False,
     chunk_size=2048,
 ):
-    audio, sr = ref_audio
+    if isinstance(ref_audio, tuple):
+        audio, sr = ref_audio
+    else:
+        audio_np, sr = librosa.load(ref_audio, sr=None)
+        audio = torch.from_numpy(audio_np).unsqueeze(0)
+
     if audio.shape[0] > 1:
         audio = torch.mean(audio, dim=0, keepdim=True)
 
@@ -543,14 +541,15 @@ def infer_batch_process(
             for chunk in infer_single_process_streaming(gen_text):
                 yield chunk
     else:
-        with ThreadPoolExecutor() as executor:
-            futures = [executor.submit(infer_single_process, gen_text) for gen_text in gen_text_batches]
-            for future in progress.tqdm(futures) if progress is not None else futures:
-                result = future.result()
-                if result:
-                    generated_wave, generated_mel_spec = result
+        iterable = progress.tqdm(gen_text_batches) if progress is not None else gen_text_batches
+        for gen_text in iterable:
+            try:
+                generated_wave, generated_mel_spec = infer_single_process(gen_text)
+                if generated_wave is not None and generated_wave.size > 0:
                     generated_waves.append(generated_wave)
                     spectrograms.append(generated_mel_spec)
+            except Exception as e:
+                print(f"Error processing batch '{gen_text}': {e}")
 
         if generated_waves:
             if cross_fade_duration <= 0:
