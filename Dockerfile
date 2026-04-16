@@ -1,30 +1,38 @@
-FROM pytorch/pytorch:2.4.0-cuda12.4-cudnn9-devel
+FROM rocm/pytorch:latest
 
 USER root
-
 ARG DEBIAN_FRONTEND=noninteractive
 
-LABEL github_repo="https://github.com/SWivid/F5-TTS"
+# 1. System Stack
+RUN apt-get update && apt-get install -y \
+    wget curl git ffmpeg sox libsox-fmt-all libsndfile1-dev \
+    openssl libssl-dev build-essential aria2 tmux vim \
+    openssh-server libsox-fmt-mp3 \
+    librdmacm1 libibumad3 librdmacm-dev libibverbs1 libibverbs-dev ibverbs-utils ibverbs-providers \
+    && rm -rf /var/lib/apt/lists/*
 
-RUN set -x \
-    && apt-get update \
-    && apt-get -y install wget curl man git less openssl libssl-dev unzip unar build-essential aria2 tmux vim \
-    && apt-get install -y openssh-server sox libsox-fmt-all libsox-fmt-mp3 libsndfile1-dev ffmpeg \
-    && apt-get install -y librdmacm1 libibumad3 librdmacm-dev libibverbs1 libibverbs-dev ibverbs-utils ibverbs-providers \
-    && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean
-    
-WORKDIR /workspace
+WORKDIR /app
 
-RUN git clone https://github.com/SWivid/F5-TTS.git \
-    && cd F5-TTS \
-    && git submodule update --init --recursive \
-    && pip install -e . --no-cache-dir
+# 2. Pull your patched branch
+RUN git clone -b infer_gradio_rocm https://github.com/killown/F5-TTS.git . \
+    && git submodule update --init --recursive
 
+# 3. Force Installation Logic
+# We uninstall any existing f5-tts first to clear the path
+RUN python3 -m pip uninstall -y f5-tts || true
+RUN python3 -m pip install --no-cache-dir --break-system-packages \
+    librosa pydub soundfile click gradio cached_path numpy tqdm transformers accelerate -e .
+
+# 4. ROCm Compatibility Fixes
+RUN python3 -m pip uninstall -y torchcodec bitsandbytes
+ENV TORCHAUDIO_BACKEND=ffmpeg
+ENV TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1
 ENV SHELL=/bin/bash
 
-VOLUME /root/.cache/huggingface/hub/
+# 5. CRITICAL: Force Python to look at /app first 
+ARG PYTHONPATH
+ENV PYTHONPATH="/app/src:${PYTHONPATH}"
 
 EXPOSE 7860
 
-WORKDIR /workspace/F5-TTS
+CMD ["python3", "src/f5_tts/infer/infer_gradio.py", "--port", "7860", "--host", "0.0.0.0"]

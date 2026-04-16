@@ -1,0 +1,26 @@
+services:
+  f5-tts:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: f5-tts-rocm
+    container_name: f5-tts-rocm
+    network_mode: "host"
+    volumes:
+      - .:/app
+    devices:
+      - "/dev/kfd:/dev/kfd"
+      - "/dev/dri:/dev/dri"
+    shm_size: "8gb"
+    privileged: true
+    environment:
+      - HSA_OVERRIDE_GFX_VERSION=12.0.1
+      - PYTORCH_ROCM_ARCH=gfx1201
+      - F5TTS_CHECKPOINT_PATH=/app/ckpts/pt-br/model_last.safetensors
+      - F5TTS_VOCAB_PATH=/app/ckpts/pt-br/vocab.txt
+    working_dir: /app
+    command: >
+      sh -c "python3 -m pip install --upgrade pip && 
+             python3 -m pip install --break-system-packages click gradio soundfile librosa numpy tqdm transformers accelerate cached_path && 
+             python3 -m pip install -e . --break-system-packages && 
+             python3 src/f5_tts/infer/infer_gradio.py --port 7860 --host 0.0.0.0"
